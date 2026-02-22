@@ -1,0 +1,60 @@
+# Dependencies
+node_modules/
+
+# Data (contains credentials)
+data/*
+!data/.gitkeep
+*.db
+
+# MAFiles (sensitive Steam Guard secrets)
+mafiles/*
+!mafiles/.gitkeep
+
+# Environment
+.env
+.env.*
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Build
+dist/
+build/
+
+# Other projects (don't upload)
+steam-authenticator-linux/
+
+# Claude
+CLAUDE.md
+.claude/
+
+# Backups and temp files
+*.bak
+*.backup
+*.tmp
+*.temp
+*~
+
+# Session/cache files
+sessions/
+.cache/
+
+# Test files
+coverage/
+.nyc_output/
+
+# Sensitive exports
+*-backup-*.json
+hour-boost-backup-*.json
