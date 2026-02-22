@@ -3,7 +3,7 @@ version: '3.8'
 services:
   steam-hour-boost:
     build: .
-    container_name: steam-hour-boost
+    container_name: steam-hour-boost1
     restart: unless-stopped
     ports:
       - "8869:8869"
