@@ -13,10 +13,8 @@ services:
     environment:
       - NODE_ENV=production
       - TZ=UTC
-      # Эти переменные будут взяты из файла .env на сервере
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
       - TELEGRAM_ADMIN_ID=${TELEGRAM_ADMIN_ID}
       - ENCRYPTION_KEY=${ENCRYPTION_KEY}
-      - SESSION_SECRET=${SESSION_SECRET} # Рекомендуется добавить
-    env_file:
-      - .env
+      - SESSION_SECRET=${SESSION_SECRET}
+    user: "node"  # Явно указываем пользователя

@@ -1,29 +1,27 @@
 FROM node:20-alpine
 
+# Устанавливаем зависимости для сборки (если нужны)
+RUN apk add --no-cache python3 make g++
+
 WORKDIR /app
 
-# Copy package files first for better caching
+# Копируем package.json и package-lock.json
 COPY package*.json ./
 
-# Install dependencies
+# Устанавливаем зависимости
 RUN npm ci --only=production
 
-# Copy application code
+# Копируем исходный код
 COPY . .
 
-# Create directories for persistent data
-RUN mkdir -p /app/data /app/mafiles
+# СОЗДАЕМ ПАПКИ И ПРАВИЛЬНО ВЫСТАВЛЯЕМ ПРАВА
+RUN mkdir -p /app/data /app/mafiles && \
+    chown -R node:node /app && \
+    chmod -R 755 /app/data && \
+    chmod -R 755 /app/mafiles
 
-# Set permissions
-RUN chown -R node:node /app
-
+# Переключаемся на пользователя node
 USER node
 
-# Expose the web UI port
-EXPOSE 8869
-
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-  CMD wget --no-verbose --tries=1 --spider http://localhost:8869/health || exit 1
-
+# Запускаем приложение
 CMD ["node", "src/index.js"]
