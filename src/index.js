@@ -1,5 +1,5 @@
 // src/index.js
-require('dotenv').config(); // ЭТО САМАЯ ПЕРВАЯ СТРОКА - ЗАГРУЗКА ПЕРЕМЕННЫХ ОКРУЖЕНИЯ
+require('dotenv').config();
 
 const express = require('express');
 const session = require('express-session');
@@ -19,7 +19,7 @@ const AdmZip = require('adm-zip');
 const crypto = require('crypto');
 const SteamUser = require('steam-user');
 const SteamTotp = require('steam-totp');
-const { Sequelize, DataTypes, Op } = require('sequelize');
+const { Sequelize, DataTypes } = require('sequelize');
 const Logger = require('./logger');
 const AccountManager = require('./account-manager');
 const MAFileManager = require('./mafile-manager');
@@ -38,8 +38,11 @@ const MAFILES_DIR = process.env.MAFILES_DIR || path.join(__dirname, '..', 'mafil
 const SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex');
 
 // Создаем необходимые директории
-if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-if (!fs.existsSync(MAFILES_DIR)) fs.mkdirSync(MAFILES_DIR, { recursive: true });
+[DATA_DIR, MAFILES_DIR, path.join(DATA_DIR, 'backups')].forEach(dir => {
+    if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true, mode: 0o777 });
+    }
+});
 
 // Инициализация сервисов
 const logger = new Logger(DATA_DIR);
@@ -54,7 +57,10 @@ const dashboardService = new DashboardService(accountManager, mafileManager);
 const sequelize = new Sequelize({
     dialect: 'sqlite',
     storage: path.join(DATA_DIR, 'database.sqlite'),
-    logging: false
+    logging: false,
+    define: {
+        timestamps: true
+    }
 });
 
 // Модель для пользователей админки
@@ -100,16 +106,25 @@ app.use(compression());
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-app.use(express.static(path.join(__dirname, '..', 'public')));
+
+// Статические файлы
+const publicPath = path.join(__dirname, '..', 'public');
+if (fs.existsSync(publicPath)) {
+    app.use(express.static(publicPath));
+}
 
 // Сессии
+const sessionStore = new session.MemoryStore();
 app.use(session({
     secret: SESSION_SECRET,
     resave: false,
     saveUninitialized: false,
+    store: sessionStore,
     cookie: {
-        secure: false, // true если будет HTTPS
-        maxAge: 24 * 60 * 60 * 1000 // 24 часа
+        secure: false,
+        maxAge: 24 * 60 * 60 * 1000,
+        httpOnly: true,
+        sameSite: 'lax'
     }
 }));
 
@@ -150,8 +165,8 @@ passport.deserializeUser(async (id, done) => {
 
 // Rate limiting для API
 const apiLimiter = rateLimit({
-    windowMs: 15 * 60 * 1000, // 15 минут
-    max: 100, // максимум 100 запросов с одного IP
+    windowMs: 15 * 60 * 1000,
+    max: 100,
     message: { error: 'Слишком много запросов, попробуйте позже' }
 });
 
@@ -165,11 +180,10 @@ function isAuthenticated(req, res, next) {
     res.status(401).json({ error: 'Не авторизован' });
 }
 
-// Проверка, настроено ли приложение (есть ли админ)
+// Проверка, настроено ли приложение
 async function isSetup(req, res, next) {
     const userCount = await User.count();
     if (userCount === 0) {
-        // Разрешаем доступ только к /api/setup
         if (req.path === '/api/setup' && req.method === 'POST') {
             return next();
         }
@@ -182,7 +196,7 @@ app.use('/api', isSetup);
 
 // ==================== API РОУТЫ ====================
 
-// Первоначальная настройка (создание админа)
+// Первоначальная настройка
 app.post('/api/setup', async (req, res) => {
     try {
         const userCount = await User.count();
@@ -202,13 +216,12 @@ app.post('/api/setup', async (req, res) => {
         
         const hashedPassword = await bcrypt.hash(password, 10);
         
-        const user = await User.create({
+        await User.create({
             username,
             password: hashedPassword,
             isAdmin: true
         });
         
-        // Создаем настройки по умолчанию
         await Setting.create({ key: 'setupComplete', value: 'true' });
         
         res.json({ success: true, message: 'Администратор создан' });
@@ -244,7 +257,6 @@ app.get('/api/auth/status', (req, res) => {
 
 // ==================== АККАУНТЫ ====================
 
-// Получить все аккаунты
 app.get('/api/accounts', isAuthenticated, async (req, res) => {
     try {
         const accounts = await accountManager.getAllAccounts();
@@ -254,7 +266,6 @@ app.get('/api/accounts', isAuthenticated, async (req, res) => {
     }
 });
 
-// Получить аккаунт по ID
 app.get('/api/accounts/:id', isAuthenticated, async (req, res) => {
     try {
         const account = await accountManager.getAccount(req.params.id);
@@ -267,7 +278,6 @@ app.get('/api/accounts/:id', isAuthenticated, async (req, res) => {
     }
 });
 
-// Создать аккаунт
 app.post('/api/accounts', isAuthenticated, async (req, res) => {
     try {
         const { accountName, password, games, personaState, mafileId } = req.body;
@@ -279,8 +289,8 @@ app.post('/api/accounts', isAuthenticated, async (req, res) => {
         const account = await accountManager.createAccount({
             accountName,
             password,
-            games: games || [730], // CS2 по умолчанию
-            personaState: personaState || 0, // 0 = Offline
+            games: games || [730],
+            personaState: personaState || 0,
             mafileId
         });
         
@@ -290,7 +300,6 @@ app.post('/api/accounts', isAuthenticated, async (req, res) => {
     }
 });
 
-// Обновить аккаунт
 app.put('/api/accounts/:id', isAuthenticated, async (req, res) => {
     try {
         const { accountName, password, games, personaState, mafileId } = req.body;
@@ -309,7 +318,6 @@ app.put('/api/accounts/:id', isAuthenticated, async (req, res) => {
     }
 });
 
-// Удалить аккаунт
 app.delete('/api/accounts/:id', isAuthenticated, async (req, res) => {
     try {
         await accountManager.deleteAccount(req.params.id);
@@ -319,7 +327,6 @@ app.delete('/api/accounts/:id', isAuthenticated, async (req, res) => {
     }
 });
 
-// Запустить фарм на аккаунте
 app.post('/api/accounts/:id/start', isAuthenticated, async (req, res) => {
     try {
         await accountManager.startAccount(req.params.id);
@@ -329,7 +336,6 @@ app.post('/api/accounts/:id/start', isAuthenticated, async (req, res) => {
     }
 });
 
-// Остановить фарм на аккаунте
 app.post('/api/accounts/:id/stop', isAuthenticated, async (req, res) => {
     try {
         await accountManager.stopAccount(req.params.id);
@@ -339,7 +345,6 @@ app.post('/api/accounts/:id/stop', isAuthenticated, async (req, res) => {
     }
 });
 
-// Запустить все аккаунты
 app.post('/api/accounts/start-all', isAuthenticated, async (req, res) => {
     try {
         await accountManager.startAllAccounts();
@@ -349,7 +354,6 @@ app.post('/api/accounts/start-all', isAuthenticated, async (req, res) => {
     }
 });
 
-// Остановить все аккаунты
 app.post('/api/accounts/stop-all', isAuthenticated, async (req, res) => {
     try {
         await accountManager.stopAllAccounts();
@@ -361,7 +365,6 @@ app.post('/api/accounts/stop-all', isAuthenticated, async (req, res) => {
 
 // ==================== MAFILES ====================
 
-// Получить все MAFiles
 app.get('/api/mafiles', isAuthenticated, async (req, res) => {
     try {
         const mafiles = await mafileManager.getAllMAFiles();
@@ -371,7 +374,6 @@ app.get('/api/mafiles', isAuthenticated, async (req, res) => {
     }
 });
 
-// Импорт MAFile из текста
 app.post('/api/mafiles/import/content', isAuthenticated, async (req, res) => {
     try {
         const { content } = req.body;
@@ -387,7 +389,6 @@ app.post('/api/mafiles/import/content', isAuthenticated, async (req, res) => {
     }
 });
 
-// Импорт MAFile из ZIP
 app.post('/api/mafiles/import/zip', isAuthenticated, upload.single('file'), async (req, res) => {
     try {
         if (!req.file) {
@@ -410,16 +411,13 @@ app.post('/api/mafiles/import/zip', isAuthenticated, upload.single('file'), asyn
             }
         }
         
-        // Удаляем временный файл
         fs.unlinkSync(req.file.path);
-        
         res.json({ results });
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
 });
 
-// Импорт из папки (сканирование директории)
 app.post('/api/mafiles/import/folder', isAuthenticated, async (req, res) => {
     try {
         const results = await mafileManager.scanDirectory();
@@ -429,7 +427,6 @@ app.post('/api/mafiles/import/folder', isAuthenticated, async (req, res) => {
     }
 });
 
-// Привязать MAFile к аккаунту
 app.post('/api/mafiles/:id/link/:accountId', isAuthenticated, async (req, res) => {
     try {
         const mafile = await mafileManager.linkToAccount(req.params.id, req.params.accountId);
@@ -439,7 +436,6 @@ app.post('/api/mafiles/:id/link/:accountId', isAuthenticated, async (req, res) =
     }
 });
 
-// Удалить MAFile
 app.delete('/api/mafiles/:id', isAuthenticated, async (req, res) => {
     try {
         await mafileManager.deleteMAFile(req.params.id);
@@ -451,7 +447,6 @@ app.delete('/api/mafiles/:id', isAuthenticated, async (req, res) => {
 
 // ==================== DASHBOARD ====================
 
-// Получить данные для дашборда
 app.get('/api/dashboard', isAuthenticated, async (req, res) => {
     try {
         const dashboardData = await dashboardService.getDashboardData();
@@ -463,7 +458,6 @@ app.get('/api/dashboard', isAuthenticated, async (req, res) => {
 
 // ==================== НАСТРОЙКИ ====================
 
-// Получить настройки
 app.get('/api/settings', isAuthenticated, async (req, res) => {
     try {
         const settings = await settingsService.getAllSettings();
@@ -473,7 +467,6 @@ app.get('/api/settings', isAuthenticated, async (req, res) => {
     }
 });
 
-// Обновить настройки
 app.put('/api/settings', isAuthenticated, async (req, res) => {
     try {
         const settings = req.body;
@@ -486,7 +479,6 @@ app.put('/api/settings', isAuthenticated, async (req, res) => {
 
 // ==================== ЛОГИ ====================
 
-// Получить логи
 app.get('/api/logs', isAuthenticated, async (req, res) => {
     try {
         const lines = req.query.lines ? parseInt(req.query.lines) : 100;
@@ -497,7 +489,6 @@ app.get('/api/logs', isAuthenticated, async (req, res) => {
     }
 });
 
-// Очистить логи
 app.delete('/api/logs', isAuthenticated, async (req, res) => {
     try {
         await logger.clearLogs();
@@ -509,7 +500,6 @@ app.delete('/api/logs', isAuthenticated, async (req, res) => {
 
 // ==================== БЕКАПЫ ====================
 
-// Создать бекап
 app.post('/api/backups', isAuthenticated, async (req, res) => {
     try {
         const { password } = req.body;
@@ -520,7 +510,6 @@ app.post('/api/backups', isAuthenticated, async (req, res) => {
     }
 });
 
-// Восстановить из бекапа
 app.post('/api/backups/restore', isAuthenticated, upload.single('file'), async (req, res) => {
     try {
         if (!req.file) {
@@ -528,12 +517,8 @@ app.post('/api/backups/restore', isAuthenticated, upload.single('file'), async (
         }
         
         const { password } = req.body;
-        
         await backupService.restoreFromBackup(req.file.path, password);
-        
-        // Удаляем временный файл
         fs.unlinkSync(req.file.path);
-        
         res.json({ success: true });
     } catch (error) {
         res.status(500).json({ error: error.message });
@@ -546,15 +531,68 @@ app.get('/health', (req, res) => {
     res.json({ 
         status: 'ok', 
         timestamp: new Date().toISOString(),
-        accounts: accountManager.getAccountsCount()
+        uptime: process.uptime()
     });
 });
 
 // ==================== ВЕБ-ИНТЕРФЕЙС ====================
 
-// Отдаем SPA (все пути отдаем index.html)
-app.get('*', (req, res) => {
-    res.sendFile(path.join(__dirname, '..', 'views', 'index.html'));
+// Путь к папке с HTML файлами
+const viewsPath = path.join(__dirname, '..', 'views');
+
+// Проверяем существование index.html, если нет - создаем
+const indexPath = path.join(viewsPath, 'index.html');
+if (!fs.existsSync(indexPath)) {
+    console.log('⚠️ index.html не найден, создаем редирект на dashboard.html');
+    const dashboardPath = path.join(viewsPath, 'dashboard.html');
+    if (fs.existsSync(dashboardPath)) {
+        // Создаем index.html с редиректом на dashboard.html
+        const redirectHtml = `<!DOCTYPE html>
+<html>
+<head>
+    <meta http-equiv="refresh" content="0;url=/dashboard.html">
+    <title>Steam Hour Boost</title>
+</head>
+<body>
+    <a href="/dashboard.html">Перейти к дашборду</a>
+</body>
+</html>`;
+        fs.writeFileSync(indexPath, redirectHtml);
+        console.log('✅ index.html создан с редиректом на dashboard.html');
+    }
+}
+
+// Отдаем статические файлы из папки views
+app.use(express.static(viewsPath));
+
+// API маршруты уже определены выше
+
+// Для всех остальных GET запросов отдаем index.html (SPA поддержка)
+app.get('*', (req, res, next) => {
+    // Пропускаем API запросы
+    if (req.path.startsWith('/api/') || req.path === '/health') {
+        return next();
+    }
+    
+    // Проверяем, существует ли запрошенный файл
+    const requestedPath = path.join(viewsPath, req.path);
+    if (fs.existsSync(requestedPath) && fs.statSync(requestedPath).isFile()) {
+        return res.sendFile(requestedPath);
+    }
+    
+    // Иначе отдаем index.html
+    const indexPath = path.join(viewsPath, 'index.html');
+    if (fs.existsSync(indexPath)) {
+        res.sendFile(indexPath);
+    } else {
+        // Если index.html нет, пробуем dashboard.html
+        const dashboardPath = path.join(viewsPath, 'dashboard.html');
+        if (fs.existsSync(dashboardPath)) {
+            res.sendFile(dashboardPath);
+        } else {
+            res.status(404).send('Файлы интерфейса не найдены');
+        }
+    }
 });
 
 // ==================== ЗАПУСК СЕРВЕРА ====================
@@ -568,104 +606,62 @@ async function startServer() {
         await sequelize.sync({ alter: true });
         console.log('✅ Модели синхронизированы');
         
-        // Загружаем сохраненные аккаунты и возобновляем фарм, если нужно
+        // Загружаем аккаунты
         await accountManager.loadAccounts();
         
-        // Настраиваем автоматическое сохранение логов
-        setInterval(() => {
-            logger.flush();
-        }, 5000); // Каждые 5 секунд
-        
-        // Запускаем HTTP сервер
+        // Запускаем сервер
         const server = app.listen(PORT, HOST, () => {
             console.log(`✅ Сервер запущен на http://${HOST}:${PORT}`);
             
-            // ========== ЗАПУСК TELEGRAM БОТА ==========
+            // Запуск Telegram бота
             try {
                 const botToken = process.env.TELEGRAM_BOT_TOKEN;
                 const adminId = process.env.TELEGRAM_ADMIN_ID;
                 
-                console.log('🔍 Проверка переменных окружения:');
-                console.log('TELEGRAM_BOT_TOKEN =', botToken ? '✅ найден' : '❌ НЕ НАЙДЕН');
-                console.log('TELEGRAM_ADMIN_ID =', adminId || '❌ НЕ НАЙДЕН');
-                
                 if (botToken) {
-                    console.log('🤖 Найден токен Telegram бота, инициализация...');
+                    console.log('🤖 Telegram бот инициализация...');
                     
-                    // Проверяем, что adminId задан (безопасность!)
                     if (!adminId) {
-                        console.warn('⚠️ TELEGRAM_ADMIN_ID не задан! Бот будет отвечать всем пользователям - ЭТО НЕБЕЗОПАСНО!');
-                        console.warn('⚠️ Укажите TELEGRAM_ADMIN_ID в переменных окружения для ограничения доступа.');
-                    } else {
-                        console.log(`🔐 Telegram бот будет обслуживать только администратора с ID: ${adminId}`);
+                        console.warn('⚠️ TELEGRAM_ADMIN_ID не задан! Бот будет отвечать всем - НЕБЕЗОПАСНО!');
                     }
                     
-                    const bot = new TelegramBot(
-                        botToken, 
-                        adminId, 
-                        `http://${HOST}:${PORT}/api`
-                    );
-                    
+                    const bot = new TelegramBot(botToken, adminId, `http://${HOST}:${PORT}/api`);
                     bot.start();
-                    
-                    // Сохраняем ссылку на бота для возможности graceful shutdown
                     app.set('telegramBot', bot);
                     
-                    console.log('✅ Telegram бот успешно запущен и готов к работе!');
-                } else {
-                    console.log('⏸ Telegram бот не запущен: TELEGRAM_BOT_TOKEN не задан');
-                    console.log('   Чтобы включить, добавьте TELEGRAM_BOT_TOKEN в .env файл');
-                    console.log('   Текущий токен из process.env:', process.env.TELEGRAM_BOT_TOKEN || 'пусто');
+                    console.log('✅ Telegram бот успешно запущен');
                 }
             } catch (botError) {
-                console.error('❌ Критическая ошибка при запуске Telegram бота:', botError.message);
-                console.error('   Проверьте токен и доступность API Telegram');
+                console.error('❌ Ошибка запуска Telegram бота:', botError.message);
             }
-            // ==========================================
         });
         
         // Graceful shutdown
-        process.on('SIGINT', async () => {
-            console.log('\n🛑 Получен сигнал завершения, останавливаем сервер...');
+        const shutdown = async () => {
+            console.log('\n🛑 Останавливаем сервер...');
             
-            // Останавливаем Telegram бота, если он есть
             const bot = app.get('telegramBot');
-            if (bot) {
-                console.log('🤖 Останавливаем Telegram бота...');
-                await bot.stop();
-            }
+            if (bot) await bot.stop();
             
-            // Останавливаем все аккаунты
             await accountManager.stopAllAccounts();
-            
-            // Сохраняем логи
             logger.flush();
             
-            process.exit(0);
-        });
+            server.close(() => {
+                console.log('✅ Сервер остановлен');
+                process.exit(0);
+            });
+        };
         
-        // Обработка других сигналов завершения
-        process.on('SIGTERM', async () => {
-            console.log('\n🛑 Получен сигнал SIGTERM, останавливаем сервер...');
-            
-            const bot = app.get('telegramBot');
-            if (bot) {
-                await bot.stop();
-            }
-            
-            await accountManager.stopAllAccounts();
-            logger.flush();
-            process.exit(0);
-        });
+        process.on('SIGINT', shutdown);
+        process.on('SIGTERM', shutdown);
         
         return server;
     } catch (error) {
-        console.error('❌ Ошибка при запуске сервера:', error);
+        console.error('❌ Ошибка запуска сервера:', error);
         process.exit(1);
     }
 }
 
-// Запускаем сервер, если файл запущен напрямую
 if (require.main === module) {
     startServer();
 }

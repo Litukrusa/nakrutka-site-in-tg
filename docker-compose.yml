@@ -1,5 +1,4 @@
-version: '3.8'
-
+cat > docker-compose.yml << 'EOF'
 services:
   steam-hour-boost:
     build: .
@@ -10,6 +9,7 @@ services:
     volumes:
       - ./data:/app/data
       - ./mafiles:/app/mafiles
+      - ./uploads:/app/uploads
     environment:
       - NODE_ENV=production
       - TZ=UTC
@@ -17,4 +17,5 @@ services:
       - TELEGRAM_ADMIN_ID=${TELEGRAM_ADMIN_ID}
       - ENCRYPTION_KEY=${ENCRYPTION_KEY}
       - SESSION_SECRET=${SESSION_SECRET}
-    user: "node"  # Явно указываем пользователя
+    user: "root"
+EOF
